@@ -1,53 +1,74 @@
-# 工作流程名称
-name: Build exe
+name: Build Executable with Resources
 
 on:
-    # 允许用户手动触发工作流程
-    workflow_dispatch:
-    # 仓库收到 push 和 pr 时触发工作流程
-    push:
-        branches: ["master"]
-    pull_request:
-        branches: ["master"]
-
-# GITHUB_TOKEN 的权限
-permissions:
-    contents: read
+  push:
+    tags:
+      - 'v*'  # 版本标签触发
+  workflow_dispatch:  # 手动触发选项
 
 jobs:
-    build:
-        # 指定运行环境
-        runs-on: windows-latest
-        # 任务步骤
-        steps:
-            # 拉取仓库代码（必须）
-            - uses: actions/checkout@v4.1.5
-            # 设置 Python 版本
-            - name: Set up Python
-              uses: actions/setup-python@v5.1.0
-              with:
-                  python-version: "3.10"
-                  # 从缓存中安装 pip (跳过下载过程)
-                  cache: "pip"
-            # pip 安装依赖
-            - name: Install dependencies
-              run: |
-                  python -m pip install --upgrade pip
-                  pip install -r requirements.txt
-            # 打包 exe
-            - name: Package
-              run: |
-                  pyinstaller -F xx1.py
-                  pyinstaller -F xx2.py
-            # 上传结果为 artifact
-            - name: Upload results
-              uses: actions/upload-artifact@v4.3.3
-              with:
-                  # 结果名(无论写什么，结果始终是zip最后)
-                  name: result_exe
-                  # 结果文件（可以是单个文件，多个文件）
-                  path: dist
-                  # 压缩级别(默认0, 0-9, 0 为不压缩)
-                  compression-level: 0
-                  # 保留时间(默认90)
-                  retention-days: 90
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller openpyxl  # 添加必要的包
+        pip install -r requirements.txt
+        
+    - name: Generate PyInstaller spec file
+      run: |
+        pyi-makespec `
+          --onefile `
+          --windowed `
+          --name MyApp `
+          --add-data "../config/*.ini;config" `
+          --add-data "../data/*;data" `
+          --add-data "../resources/*;resources" `
+          --hidden-import configparser `
+          --hidden-import openpyxl `
+          src/send_email.py
+          
+        # 调整生成的 spec 文件确保正确路径
+        (Get-Content MyApp.spec).Replace("os.getcwd()", "os.path.join(os.path.dirname(sys.executable), '..')") | Set-Content MyApp.spec
+        
+    - name: Run PyInstaller
+      run: |
+        pyinstaller MyApp.spec
+        
+    - name: Create release bundle
+      run: |
+        # 创建发布目录结构
+        mkdir release
+        cp dist/MyApp.exe release/
+        
+        # 复制必要的资源文件（保持相对路径）
+        mkdir release/config
+        cp config/*.ini release/config/
+        
+        mkdir -p release/data
+        cp data/* release/data/
+        
+        mkdir -p release/resources/images
+        cp resources/images/* release/resources/images/
+        
+        # 创建压缩包
+        Compress-Archive -Path release/* -DestinationPath MyApp_${{ github.ref_name }}.zip
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: MyApp-Windows-${{ github.ref_name }}
+        path: |
+          MyApp_${{ github.ref_name }}.zip
+          dist/MyApp.exe
